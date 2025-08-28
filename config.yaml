@@ -1,0 +1,66 @@
+# === Local Knowledge Assistant - Configuration ===
+# Change source_dir to the root folder containing your code and docs.
+source_dir: "C:/vk-data"
+
+# Where to store the local Chroma vector database (relative or absolute path)
+chroma_path: "./chroma_db"
+
+# Name of your vector collection
+collection: "local_kb"
+
+# File types to include
+include_extensions:
+  - ".md"
+  - ".txt"
+  - ".py"
+  - ".ipynb"
+  - ".js"
+  - ".jsx"
+  - ".ts"
+  - ".tsx"
+  - ".java"
+  - ".kt"
+  - ".go"
+  - ".rb"
+  - ".rs"
+  - ".cpp"
+  - ".c"
+  - ".h"
+  - ".hpp"
+  - ".cs"
+  - ".sh"
+  - ".bash"
+  - ".ps1"
+  - ".yaml"
+  - ".yml"
+  - ".json"
+  - ".ini"
+  - ".toml"
+
+# Folders to skip while scanning
+excludes:
+  - ".git"
+  - "node_modules"
+  - ".venv"
+  - "__pycache__"
+  - "build"
+  - "dist"
+  - ".terraform"
+  - ".idea"
+  - ".vscode"
+  - ".vs"
+  - "TestResults"
+  - "out"
+  - "logs"
+  - "tmp"
+  - "obj"
+  - "bin"
+
+# Chunking parameters
+chunk:
+  size: 1200        # characters per chunk
+  overlap: 200      # overlap between chunks
+
+model:
+  embedder: "BAAI/bge-small-en-v1.5"   # local embedding model (downloaded once)
+  llm: "llama3:8b"                     # Ollama model name (change as you like)
