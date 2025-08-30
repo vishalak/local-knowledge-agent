@@ -20,7 +20,7 @@ from metadata_extractor import extract_all_metadata
 from query_transformer import transform_query
 from reranker import create_reranker
 from chat_history import create_chat_history
-from chat_history import create_chat_history
+from source_citation import SourceCitationManager
 
 STATE_DIR = ".kb_state"
 STATE_FILE = "state.json"
@@ -32,6 +32,9 @@ class KnowledgeBase:
         self.collection = self._connect_collection()
         self.state_path = Path(STATE_DIR) / STATE_FILE
         self.state = self._load_state()
+        
+        # Initialize source citation manager
+        self.citation_manager = SourceCitationManager(self.cfg["source_dir"])
         
         # Initialize reranker
         rerank_config = self.cfg.get("retrieval", {})
@@ -660,6 +663,65 @@ Please provide a helpful and accurate answer based on the context provided. If t
         if self.chat_enabled and self.chat_history:
             return self.chat_history.export_history(format=format)
         return None
+
+    def format_sources_for_display(self, context_docs: List[Dict], 
+                                 format_type: str = "terminal",
+                                 show_preview: bool = True,
+                                 max_sources: int = 5) -> str:
+        """
+        Format sources for display using the enhanced citation manager.
+        
+        Args:
+            context_docs: List of context documents with metadata
+            format_type: Display format ("terminal", "response", or "markdown")
+            show_preview: Whether to show content preview
+            max_sources: Maximum number of sources to display
+            
+        Returns:
+            Formatted source citations
+        """
+        if format_type == "terminal":
+            return self.citation_manager.format_sources_for_terminal(
+                context_docs, show_preview=show_preview, max_sources=max_sources
+            )
+        elif format_type == "response":
+            return self.citation_manager.format_sources_for_response(context_docs)
+        else:  # markdown or default
+            return self.citation_manager.format_sources_for_response(context_docs)
+    
+    def enhance_response_with_citations(self, response: str, 
+                                      context_docs: List[Dict],
+                                      include_inline: bool = False) -> str:
+        """
+        Enhance response with detailed source citations.
+        
+        Args:
+            response: The generated response text
+            context_docs: List of context documents
+            include_inline: Whether to include inline citations
+            
+        Returns:
+            Enhanced response with citations
+        """
+        if include_inline:
+            response = self.citation_manager.format_inline_citations(response, context_docs)
+        
+        # Add detailed source list at the end
+        source_citations = self.citation_manager.format_sources_for_response(context_docs, response)
+        
+        return response + source_citations
+    
+    def get_vscode_links(self, context_docs: List[Dict]) -> List[str]:
+        """
+        Generate VS Code links for opening source files.
+        
+        Args:
+            context_docs: List of context documents
+            
+        Returns:
+            List of VS Code URI links
+        """
+        return self.citation_manager.generate_vscode_links(context_docs)
 
     def _reset_client(self):
         """Resets the ChromaDB client. Used for testing to release file locks."""

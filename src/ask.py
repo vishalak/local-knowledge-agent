@@ -45,6 +45,9 @@ def main():
     parser.add_argument("--k", type=int, default=6, help="Top-k chunks to retrieve")
     parser.add_argument("--model", "-m", default=None, help="Override Ollama model name")
     parser.add_argument("--show-sources", action="store_true", help="Print retrieved sources")
+    parser.add_argument("--enhanced-citations", action="store_true", help="Show enhanced source citations with metadata")
+    parser.add_argument("--inline-citations", action="store_true", help="Include inline citations in response")
+    parser.add_argument("--vscode-links", action="store_true", help="Generate VS Code links for sources")
     parser.add_argument("--interactive", "-i", action="store_true", help="Start interactive conversation mode")
     parser.add_argument("--clear-history", action="store_true", help="Clear conversation history")
     parser.add_argument("--show-history", action="store_true", help="Show conversation summary")
@@ -94,10 +97,16 @@ def main():
         print("Type '/clear' to clear conversation history")
         print("Type '/history' to show conversation summary")
         print("Type '/sources' to toggle source display")
+        print("Type '/enhanced' to toggle enhanced source citations")
+        print("Type '/inline' to toggle inline citations")
+        print("Type '/vscode' to show VS Code links")
         print("Type '/stream' to toggle streaming mode")
         print("---")
         
         show_sources_in_interactive = args.show_sources
+        enhanced_citations = args.enhanced_citations
+        inline_citations = args.inline_citations
+        show_vscode_links = args.vscode_links
         use_streaming = args.stream
         
         try:
@@ -130,6 +139,21 @@ def main():
                         print(f"[dim]Source display: {'ON' if show_sources_in_interactive else 'OFF'}[/dim]")
                         continue
                     
+                    if user_input == '/enhanced':
+                        enhanced_citations = not enhanced_citations
+                        print(f"[dim]Enhanced citations: {'ON' if enhanced_citations else 'OFF'}[/dim]")
+                        continue
+                    
+                    if user_input == '/inline':
+                        inline_citations = not inline_citations
+                        print(f"[dim]Inline citations: {'ON' if inline_citations else 'OFF'}[/dim]")
+                        continue
+                    
+                    if user_input == '/vscode':
+                        show_vscode_links = not show_vscode_links
+                        print(f"[dim]VS Code links: {'ON' if show_vscode_links else 'OFF'}[/dim]")
+                        continue
+                    
                     if user_input == '/stream':
                         use_streaming = not use_streaming
                         print(f"[dim]Streaming mode: {'ON' if use_streaming else 'OFF'}[/dim]")
@@ -140,13 +164,30 @@ def main():
                         result = kb.ask_with_context(user_input, k=args.k, stream=True)
                         
                         # Show sources if requested
-                        if show_sources_in_interactive and result['context_docs']:
-                            print("\n[dim]Sources:[/dim]")
-                            for item in result['context_docs'][:3]:  # Show top 3 sources
-                                source_info = f"  [{item['rank']}] {item['path']}:{item['start']}–{item['end']}"
-                                if item.get('distance'):
-                                    source_info += f" (dist: {item['distance']:.3f})"
-                                print(f"[dim]{source_info}[/dim]")
+                        if (show_sources_in_interactive or enhanced_citations) and result['context_docs']:
+                            if enhanced_citations:
+                                sources_display = kb.format_sources_for_display(
+                                    result['context_docs'], 
+                                    format_type="terminal",
+                                    show_preview=True,
+                                    max_sources=5
+                                )
+                                print(f"\n{sources_display}")
+                            else:
+                                print("\n[dim]Sources:[/dim]")
+                                for item in result['context_docs'][:3]:  # Show top 3 sources
+                                    source_info = f"  [{item['rank']}] {item['path']}:{item['start']}–{item['end']}"
+                                    if item.get('distance'):
+                                        source_info += f" (dist: {item['distance']:.3f})"
+                                    print(f"[dim]{source_info}[/dim]")
+                        
+                        # Show VS Code links if requested
+                        if show_vscode_links and result['context_docs']:
+                            vscode_links = kb.get_vscode_links(result['context_docs'])
+                            if vscode_links:
+                                print("\n[bold]VS Code Links:[/bold]")
+                                for i, link in enumerate(vscode_links[:3], 1):
+                                    print(f"[cyan][{i}][/cyan] {link}")
                         
                         # Stream the response
                         print("\n", end="", flush=True)
@@ -170,13 +211,42 @@ def main():
                     else:
                         result = kb.ask_with_context(user_input, k=args.k, stream=False)
                         
+                        # Enhance response with inline citations if requested
+                        response_text = result['response']
+                        if inline_citations:
+                            response_text = kb.enhance_response_with_citations(
+                                response_text, 
+                                result['context_docs'], 
+                                include_inline=True
+                            )
+                        
+                        print(f"\n{response_text}")
+                        
                         # Show sources if requested
-                        if show_sources_in_interactive and result['context_docs']:
-                            print("\n[dim]Sources:[/dim]")
-                            for item in result['context_docs'][:3]:  # Show top 3 sources
-                                source_info = f"  [{item['rank']}] {item['path']}:{item['start']}–{item['end']}"
-                                if item.get('distance'):
-                                    source_info += f" (dist: {item['distance']:.3f})"
+                        if (show_sources_in_interactive or enhanced_citations) and result['context_docs']:
+                            if enhanced_citations:
+                                sources_display = kb.format_sources_for_display(
+                                    result['context_docs'], 
+                                    format_type="terminal",
+                                    show_preview=True,
+                                    max_sources=5
+                                )
+                                print(f"\n{sources_display}")
+                            else:
+                                print("\n[dim]Sources:[/dim]")
+                                for item in result['context_docs'][:3]:  # Show top 3 sources
+                                    source_info = f"  [{item['rank']}] {item['path']}:{item['start']}–{item['end']}"
+                                    if item.get('distance'):
+                                        source_info += f" (dist: {item['distance']:.3f})"
+                                    print(f"[dim]{source_info}[/dim]")
+                        
+                        # Show VS Code links if requested
+                        if show_vscode_links and result['context_docs']:
+                            vscode_links = kb.get_vscode_links(result['context_docs'])
+                            if vscode_links:
+                                print("\n[bold]VS Code Links:[/bold]")
+                                for i, link in enumerate(vscode_links[:3], 1):
+                                    print(f"[cyan][{i}][/cyan] {link}")
                                 print(f"[dim]{source_info}[/dim]")
                         
                         # Show response
@@ -197,7 +267,7 @@ def main():
     if not query:
         print("[red]No question provided.[/red]")
         return
-    
+
     # Use conversational interface for single questions too
     if args.stream:
         result = kb.ask_with_context(query, k=args.k, stream=True)
@@ -206,8 +276,28 @@ def main():
             print("[red]No results in local knowledge base.[/red] Try re-indexing or adjusting your query.")
             return
 
-        if args.show_sources:
-            print(Markdown("--- \n*SOURCES*"))
+        # Show sources with enhanced citations if requested
+        if args.show_sources or args.enhanced_citations:
+            if args.enhanced_citations:
+                sources_display = kb.format_sources_for_display(
+                    result['context_docs'], 
+                    format_type="terminal",
+                    show_preview=True,
+                    max_sources=5
+                )
+                print(f"\n{sources_display}")
+            else:
+                print(Markdown("--- \n*SOURCES*"))
+                for item in result['context_docs']:
+                    print(f"- [{item['rank']}] `{item['path']}:{item['start']}–{item['end']}`")
+        
+        # Show VS Code links if requested
+        if args.vscode_links and result['context_docs']:
+            vscode_links = kb.get_vscode_links(result['context_docs'])
+            if vscode_links:
+                print("\n[bold]VS Code Links:[/bold]")
+                for i, link in enumerate(vscode_links[:3], 1):
+                    print(f"[cyan][{i}][/cyan] {link}")
             for item in result['context_docs']:
                 # Basic source info
                 source_info = f"[{item['rank']}] {item['path']}:{item['start']}–{item['end']}"
@@ -260,37 +350,65 @@ def main():
             print("[red]No results in local knowledge base.[/red] Try re-indexing or adjusting your query.")
             return
 
-        if args.show_sources:
-            print(Markdown("--- \n*SOURCES*"))
-            for item in result['context_docs']:
-                # Basic source info
-                source_info = f"[{item['rank']}] {item['path']}:{item['start']}–{item['end']}"
-                if item.get('distance'):
-                    source_info += f" (distance: {item['distance']:.3f})"
-                
-                # Add reranking scores if available
-                if item.get('bm25_score'):
-                    source_info += f" (BM25: {item['bm25_score']:.3f})"
-                if item.get('hybrid_score'):
-                    source_info += f" (hybrid: {item['hybrid_score']:.3f})"
-                
-                # Add metadata info if available
-                if 'filename' in item and item.get('file_size_kb'):
-                    source_info += f" | {item['file_size_kb']}KB"
-                if item.get('is_code_file'):
-                    source_info += " | CODE"
-                elif item.get('is_documentation'):
-                    source_info += " | DOCS"
-                if item.get('modified_date'):
-                    # Show just the date part
-                    mod_date = item['modified_date'][:10] if len(item['modified_date']) >= 10 else item['modified_date']
-                    source_info += f" | Modified: {mod_date}"
-                
-                print(source_info)
-            print(Markdown("---"))
+        # Enhance response with inline citations if requested
+        response_text = result['response']
+        if args.inline_citations:
+            response_text = kb.enhance_response_with_citations(
+                response_text, 
+                result['context_docs'], 
+                include_inline=True
+            )
+
+        # Show sources with enhanced citations if requested
+        if args.show_sources or args.enhanced_citations:
+            if args.enhanced_citations:
+                sources_display = kb.format_sources_for_display(
+                    result['context_docs'], 
+                    format_type="terminal",
+                    show_preview=True,
+                    max_sources=5
+                )
+                print(f"{sources_display}\n")
+            else:
+                print(Markdown("--- \n*SOURCES*"))
+                for item in result['context_docs']:
+                    # Basic source info
+                    source_info = f"[{item['rank']}] {item['path']}:{item['start']}–{item['end']}"
+                    if item.get('distance'):
+                        source_info += f" (distance: {item['distance']:.3f})"
+                    
+                    # Add reranking scores if available
+                    if item.get('bm25_score'):
+                        source_info += f" (BM25: {item['bm25_score']:.3f})"
+                    if item.get('hybrid_score'):
+                        source_info += f" (hybrid: {item['hybrid_score']:.3f})"
+                    
+                    # Add metadata info if available
+                    if 'filename' in item and item.get('file_size_kb'):
+                        source_info += f" | {item['file_size_kb']}KB"
+                    if item.get('is_code_file'):
+                        source_info += " | CODE"
+                    elif item.get('is_documentation'):
+                        source_info += " | DOCS"
+                    if item.get('modified_date'):
+                        # Show just the date part
+                        mod_date = item['modified_date'][:10] if len(item['modified_date']) >= 10 else item['modified_date']
+                        source_info += f" | Modified: {mod_date}"
+                    
+                    print(source_info)
+                print(Markdown("---"))
+        
+        # Show VS Code links if requested
+        if args.vscode_links and result['context_docs']:
+            vscode_links = kb.get_vscode_links(result['context_docs'])
+            if vscode_links:
+                print("\n[bold]VS Code Links:[/bold]")
+                for i, link in enumerate(vscode_links[:3], 1):
+                    print(f"[cyan][{i}][/cyan] {link}")
+                print()
 
         # Show the response
-        print(Markdown(result['response']))
+        print(Markdown(response_text))
 
 if __name__ == "__main__":
     main()
