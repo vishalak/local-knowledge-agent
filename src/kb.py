@@ -2,8 +2,9 @@
 import hashlib
 import json
 import os
+import time
 from pathlib import Path
-from typing import Dict, List, Tuple
+from typing import Dict, List, Tuple, Optional, Any
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import yaml
@@ -18,6 +19,7 @@ from semantic_chunker import get_semantic_chunks
 from metadata_extractor import extract_all_metadata
 from query_transformer import transform_query
 from reranker import create_reranker
+from chat_history import create_chat_history
 
 STATE_DIR = ".kb_state"
 STATE_FILE = "state.json"
@@ -36,6 +38,16 @@ class KnowledgeBase:
             method=rerank_config.get("rerank_method", "bm25"),
             config=rerank_config
         )
+        
+        # Initialize chat history if enabled
+        chat_config = self.cfg.get("chat", {})
+        self.chat_enabled = chat_config.get("enabled", True)
+        if self.chat_enabled:
+            self.chat_history = create_chat_history(
+                max_history=chat_config.get("max_history", 10)
+            )
+        else:
+            self.chat_history = None
 
     def _load_config(self) -> dict:
         with open(self.config_path, "r", encoding="utf-8") as f:
@@ -44,11 +56,12 @@ class KnowledgeBase:
         assert "source_dir" in cfg and cfg["source_dir"], "source_dir is required in config.yaml"
         cfg.setdefault("chroma_path", "./chroma_db")
         cfg.setdefault("collection", "local_kb")
-        cfg.setdefault("include_extensions", [".md", ".txt", ".py", ".pdf", ".docx", ".doc"])
+        cfg.setdefault("include_extensions", [".md", ".txt", ".py", ".pdf", ".docx", ".doc", ".cs"])
         cfg.setdefault("excludes", [".git", "node_modules", ".venv", "__pycache__", "build", "dist"])
         cfg.setdefault("chunk", {"size": 1200, "overlap": 200, "semantic": True})
         cfg.setdefault("metadata", {"generate_summaries": False, "extract_advanced": True})
         cfg.setdefault("retrieval", {"query_transform": "hyde", "max_results": 10, "rerank_method": "bm25", "rerank_max_results": 5})
+        cfg.setdefault("chat", {"enabled": True, "max_history": 10, "use_context": True, "max_context_exchanges": 3})
         cfg.setdefault("model", {"embedder": "BAAI/bge-small-en-v1.5", "llm": "llama3:8b"})
         return cfg
 
@@ -381,6 +394,153 @@ class KnowledgeBase:
                 item["rank"] = i + 1
         
         return final_results
+
+    def ask_with_context(self, query: str, k: int = 6) -> Dict[str, Any]:
+        """
+        Ask a question with conversation context support.
+        
+        Args:
+            query: The user's question
+            k: Number of context documents to retrieve
+            
+        Returns:
+            Dictionary with response, context documents, and metadata
+        """
+        start_time = time.time()
+        
+        # Enhance query with conversation context if chat is enabled
+        enhanced_query = query
+        if self.chat_enabled and self.chat_history:
+            chat_config = self.cfg.get("chat", {})
+            if chat_config.get("use_context", True):
+                enhanced_query = self.chat_history.enhance_query_with_context(
+                    query, 
+                    max_context_exchanges=chat_config.get("max_context_exchanges", 3)
+                )
+                
+                if enhanced_query != query:
+                    print("[cyan]Enhanced query with conversation context[/cyan]")
+        
+        # Retrieve relevant context using the enhanced query
+        context_docs = self.retrieve_context(enhanced_query, k=k)
+        
+        # Generate response using LLM
+        response = self._generate_response(query, context_docs, enhanced_query)
+        
+        # Add to chat history if enabled
+        if self.chat_enabled and self.chat_history:
+            self.chat_history.add_exchange(
+                user_query=query,
+                assistant_response=response,
+                context_docs=context_docs,
+                metadata={
+                    "enhanced_query": enhanced_query,
+                    "num_context_docs": len(context_docs),
+                    "response_time": time.time() - start_time
+                }
+            )
+        
+        return {
+            "response": response,
+            "context_docs": context_docs,
+            "enhanced_query": enhanced_query,
+            "conversation_id": self.chat_history.session_id if self.chat_history else None,
+            "response_time": time.time() - start_time
+        }
+    
+    def _generate_response(self, original_query: str, context_docs: List[Dict], 
+                          enhanced_query: str) -> str:
+        """
+        Generate response using LLM based on context documents.
+        
+        Args:
+            original_query: The user's original question
+            context_docs: Retrieved context documents
+            enhanced_query: Query enhanced with conversation context
+            
+        Returns:
+            Generated response
+        """
+        # If no context found, return a helpful message
+        if not context_docs:
+            return "I don't have enough information in the local knowledge base to answer that question."
+        
+        # Build context string from retrieved documents
+        context_parts = []
+        for i, doc in enumerate(context_docs[:5], 1):  # Limit to top 5 documents
+            context_parts.append(f"Source {i}: {doc.get('text', '')}")
+        
+        context_text = "\n\n".join(context_parts)
+        
+        # Create prompt for LLM
+        conversation_context = ""
+        if self.chat_enabled and self.chat_history and self.chat_history.history:
+            conversation_context = f"""
+Conversation context:
+{self.chat_history.get_conversation_context(include_responses=True, max_exchanges=2)}
+
+"""
+        
+        prompt = f"""{conversation_context}Based on the following context documents, please answer the user's question.
+
+Context:
+{context_text}
+
+Question: {original_query}
+
+Please provide a helpful and accurate answer based on the context provided. If the context doesn't contain enough information to fully answer the question, please say so."""
+        
+        # For now, return a simple response (in a real implementation, this would call an LLM)
+        # This is a placeholder since we don't want to require Ollama for basic functionality
+        try:
+            # Attempt to use LLM if available
+            import requests
+            
+            llm_model = self.cfg["model"]["llm"]
+            response = requests.post(
+                "http://localhost:11434/api/generate",
+                json={
+                    "model": llm_model,
+                    "prompt": prompt,
+                    "stream": False
+                },
+                timeout=30
+            )
+            
+            if response.status_code == 200:
+                return response.json().get("response", "No response generated.")
+            else:
+                raise Exception(f"LLM request failed with status {response.status_code}")
+                
+        except Exception as e:
+            # Fallback to context-based response
+            print(f"[yellow]LLM not available ({e}), using context summary[/yellow]")
+            
+            # Simple context-based response
+            if len(context_text) > 500:
+                context_summary = context_text[:500] + "..."
+            else:
+                context_summary = context_text
+            
+            return f"Based on the available information: {context_summary}"
+    
+    def get_conversation_summary(self) -> Optional[Dict[str, Any]]:
+        """Get summary of current conversation."""
+        if self.chat_enabled and self.chat_history:
+            return self.chat_history.get_conversation_summary()
+        return None
+    
+    def clear_conversation(self):
+        """Clear the current conversation history."""
+        if self.chat_enabled and self.chat_history:
+            self.chat_history.clear_history()
+            print("[green]Conversation history cleared[/green]")
+    
+    def export_conversation(self, format: str = "json") -> Optional[str]:
+        """Export current conversation history."""
+        if self.chat_enabled and self.chat_history:
+            return self.chat_history.export_history(format=format)
+        return None
 
     def _reset_client(self):
         """Resets the ChromaDB client. Used for testing to release file locks."""

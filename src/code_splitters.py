@@ -79,6 +79,51 @@ def split_javascript_code(code: str, max_chunk_size: int = 1200) -> List[Tuple[i
     
     return chunks
 
+def split_csharp_code(code: str, max_chunk_size: int = 1200) -> List[Tuple[int, int, str]]:
+    """Split C# code into meaningful chunks based on classes, methods, and properties."""
+    lines = code.split('\n')
+    chunks = []
+    current_chunk = []
+    current_start = 0
+    current_size = 0
+    
+    for i, line in enumerate(lines):
+        stripped = line.strip()
+        
+        # Check for C# constructs that should start new chunks
+        patterns = [
+            r'^(public|private|protected|internal|static)?\s*(class|interface|struct|enum)\s+',
+            r'^(public|private|protected|internal|static|virtual|override|abstract)?\s*\w+\s+\w+\s*\([^)]*\)\s*{?$',  # Methods
+            r'^(public|private|protected|internal|static)?\s*(get|set)\s*{',  # Properties
+            r'^namespace\s+',  # Namespaces
+            r'^using\s+',  # Using statements (group together)
+        ]
+        
+        is_significant_construct = any(re.match(pattern, stripped) for pattern in patterns)
+        
+        if is_significant_construct and current_chunk and current_size + len(line) > max_chunk_size:
+            chunk_text = '\n'.join(current_chunk)
+            chunks.append((current_start, current_start + len(chunk_text), chunk_text))
+            current_chunk = []
+            current_start = sum(len(l) + 1 for l in lines[:i])
+            current_size = 0
+        
+        current_chunk.append(line)
+        current_size += len(line) + 1
+        
+        if current_size > max_chunk_size:
+            chunk_text = '\n'.join(current_chunk)
+            chunks.append((current_start, current_start + len(chunk_text), chunk_text))
+            current_chunk = []
+            current_start = sum(len(l) + 1 for l in lines[:i+1])
+            current_size = 0
+    
+    if current_chunk:
+        chunk_text = '\n'.join(current_chunk)
+        chunks.append((current_start, current_start + len(chunk_text), chunk_text))
+    
+    return chunks
+
 def get_code_aware_chunks(file_path: Path, content: str, max_chunk_size: int = 1200) -> List[Tuple[int, int, str]]:
     """
     Get code-aware chunks based on file extension.
@@ -90,6 +135,8 @@ def get_code_aware_chunks(file_path: Path, content: str, max_chunk_size: int = 1
         return split_python_code(content, max_chunk_size)
     elif suffix in ['.js', '.jsx', '.ts', '.tsx']:
         return split_javascript_code(content, max_chunk_size)
+    elif suffix in ['.cs', '.cshtml', '.razor']:
+        return split_csharp_code(content, max_chunk_size)
     else:
         # Fall back to regular character-based chunking
         return None  # Let the caller handle regular chunking
