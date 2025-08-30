@@ -28,5 +28,5 @@ This document outlines the plan for enhancing the Local Knowledge Base Agent pro
 ### 4. Enhance User Experience and Interface
 
 - [x] Implement streaming for LLM responses to show real-time generation.
-- [ ] Cite sources for each answer to build trust and allow verification.
-- [ ] Build a simple web UI using Streamlit or Gradio for easier interaction.
+- [x] Cite sources for each answer to build trust and allow verification.
+- [x] Build a simple web UI using Streamlit or Gradio for easier interaction.
