@@ -17,6 +17,7 @@ from code_splitters import get_code_aware_chunks
 from semantic_chunker import get_semantic_chunks
 from metadata_extractor import extract_all_metadata
 from query_transformer import transform_query
+from reranker import create_reranker
 
 STATE_DIR = ".kb_state"
 STATE_FILE = "state.json"
@@ -28,6 +29,13 @@ class KnowledgeBase:
         self.collection = self._connect_collection()
         self.state_path = Path(STATE_DIR) / STATE_FILE
         self.state = self._load_state()
+        
+        # Initialize reranker
+        rerank_config = self.cfg.get("retrieval", {})
+        self.reranker = create_reranker(
+            method=rerank_config.get("rerank_method", "bm25"),
+            config=rerank_config
+        )
 
     def _load_config(self) -> dict:
         with open(self.config_path, "r", encoding="utf-8") as f:
@@ -40,7 +48,7 @@ class KnowledgeBase:
         cfg.setdefault("excludes", [".git", "node_modules", ".venv", "__pycache__", "build", "dist"])
         cfg.setdefault("chunk", {"size": 1200, "overlap": 200, "semantic": True})
         cfg.setdefault("metadata", {"generate_summaries": False, "extract_advanced": True})
-        cfg.setdefault("retrieval", {"query_transform": "hyde", "max_results": 10})
+        cfg.setdefault("retrieval", {"query_transform": "hyde", "max_results": 10, "rerank_method": "bm25", "rerank_max_results": 5})
         cfg.setdefault("model", {"embedder": "BAAI/bge-small-en-v1.5", "llm": "llama3:8b"})
         return cfg
 
@@ -311,14 +319,67 @@ class KnowledgeBase:
                 seen.add(key)
                 unique_results.append(item)
         
-        # Sort by distance (best matches first) and limit results
-        unique_results.sort(key=lambda x: x.get("distance", float('inf')))
-        final_results = unique_results[:k]
+        # Apply reranking if configured
+        rerank_method = self.cfg["retrieval"].get("rerank_method", "none")
+        rerank_max = self.cfg["retrieval"].get("rerank_max_results", k)
         
-        # Re-rank the results
-        for i, item in enumerate(final_results):
-            item["rank"] = i + 1
+        if rerank_method != "none" and unique_results:
+            print(f"[cyan]Applying {rerank_method} reranking...[/cyan]")
             
+            # Prepare documents for reranking (convert to expected format)
+            docs_for_rerank = []
+            for item in unique_results:
+                doc_dict = {
+                    "content": item.get("text", ""),
+                    "distance": item.get("distance", 1.0),
+                    **item  # Include all original metadata
+                }
+                docs_for_rerank.append(doc_dict)
+            
+            # Apply reranking
+            reranked_docs = self.reranker.rerank_documents(
+                query=query,  # Use original query for reranking
+                documents=docs_for_rerank,
+                max_results=rerank_max
+            )
+            
+            # Convert back to original format
+            final_results = []
+            for i, doc in enumerate(reranked_docs[:k]):
+                result_item = {
+                    "rank": i + 1,
+                    "text": doc.get("content", ""),
+                    "path": doc.get("path"),
+                    "start": doc.get("start"),
+                    "end": doc.get("end"),
+                    "distance": doc.get("distance"),
+                    "query_used": doc.get("query_used"),
+                    "query_index": doc.get("query_index"),
+                }
+                
+                # Add reranking scores if available
+                if "bm25_score" in doc:
+                    result_item["bm25_score"] = doc["bm25_score"]
+                if "semantic_score" in doc:
+                    result_item["semantic_score"] = doc["semantic_score"]
+                if "hybrid_score" in doc:
+                    result_item["hybrid_score"] = doc["hybrid_score"]
+                
+                # Add all other metadata
+                for key, value in doc.items():
+                    if key not in result_item and key != "content":
+                        result_item[key] = value
+                
+                final_results.append(result_item)
+        else:
+            # Sort by distance (best matches first) and limit results
+            unique_results.sort(key=lambda x: x.get("distance", float('inf')))
+            final_results = unique_results[:k]
+            
+            # Re-rank the results
+            for i, item in enumerate(final_results):
+                item["rank"] = i + 1
+        
         return final_results
 
     def _reset_client(self):

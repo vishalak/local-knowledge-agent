@@ -73,6 +73,12 @@ metadata:
 retrieval:
   query_transform: "hyde"    # Query transformation method: "none", "hyde", "expand", "enhance", "multi"
   max_results: 10           # Maximum results to consider before filtering
+  rerank_method: "bm25"     # Reranking method: "none", "bm25", "semantic", "hybrid"
+  rerank_max_results: 5     # Maximum results after reranking
+  vector_weight: 0.7        # Weight for vector similarity in hybrid reranking
+  bm25_weight: 0.3          # Weight for BM25 score in hybrid reranking
+  bm25_k1: 1.2              # BM25 parameter k1
+  bm25_b: 0.75              # BM25 parameter b
 
 model:
   embedder: "BAAI/bge-small-en-v1.5"   # local embedding model (downloaded once)

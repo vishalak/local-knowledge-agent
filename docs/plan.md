@@ -22,7 +22,7 @@ This document outlines the plan for enhancing the Local Knowledge Base Agent pro
 ### 3. Improve Retrieval and Generation Quality
 
 - [x] Implement query transformations (e.g., HyDE) to refine user queries. ✅
-- [ ] Add a reranking step to improve the precision of retrieved documents.
+- [x] Add a reranking step to improve the precision of retrieved documents. ✅
 - [ ] Incorporate chat history to make the agent conversational.
 
 ### 4. Enhance User Experience and Interface
