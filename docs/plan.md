@@ -17,7 +17,7 @@ This document outlines the plan for enhancing the Local Knowledge Base Agent pro
 - [x] Implement code-aware splitting for source code files.
 - [x] Use parallel processing to speed up indexing.
 - [x] Explore semantic chunking for more meaningful text splits.
-- [ ] Extract and store more advanced metadata (e.g., creation dates, summaries).
+- [x] Extract and store more advanced metadata (e.g., creation dates, summaries).
 
 ### 3. Improve Retrieval and Generation Quality
 

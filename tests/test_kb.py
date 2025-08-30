@@ -29,8 +29,9 @@ class TestKnowledgeBase(unittest.TestCase):
             "collection": "test_kb",
             "include_extensions": [".txt"],
             "excludes": ["exclude_this"],
-            "chunk": {"size": 100, "overlap": 20},
-            "model": {"embedder": "BAAI/bge-small-en-v1.5"}
+            "chunk": {"size": 100, "overlap": 20, "semantic": False},
+            "metadata": {"extract_advanced": True, "generate_summaries": False},
+            "model": {"embedder": "BAAI/bge-small-en-v1.5", "llm": "llama3:8b"}
         }
         with open(self.config_path, "w") as f:
             yaml.dump(self.config, f)

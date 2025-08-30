@@ -15,6 +15,7 @@ from chromadb.utils import embedding_functions
 from document_processors import extract_text_from_file
 from code_splitters import get_code_aware_chunks
 from semantic_chunker import get_semantic_chunks
+from metadata_extractor import extract_all_metadata
 
 STATE_DIR = ".kb_state"
 STATE_FILE = "state.json"
@@ -37,6 +38,7 @@ class KnowledgeBase:
         cfg.setdefault("include_extensions", [".md", ".txt", ".py", ".pdf", ".docx", ".doc"])
         cfg.setdefault("excludes", [".git", "node_modules", ".venv", "__pycache__", "build", "dist"])
         cfg.setdefault("chunk", {"size": 1200, "overlap": 200, "semantic": True})
+        cfg.setdefault("metadata", {"generate_summaries": False, "extract_advanced": True})
         cfg.setdefault("model", {"embedder": "BAAI/bge-small-en-v1.5", "llm": "llama3:8b"})
         return cfg
 
@@ -126,12 +128,35 @@ class KnowledgeBase:
         file_hash = self._sha256_bytes(b)
         mtime = int(file_path.stat().st_mtime)
 
+        # Extract advanced metadata if enabled
+        file_metadata = {}
+        if self.cfg["metadata"].get("extract_advanced", True):
+            file_metadata = extract_all_metadata(
+                file_path, 
+                text, 
+                generate_summaries=self.cfg["metadata"].get("generate_summaries", False),
+                llm_model=self.cfg["model"]["llm"]
+            )
+
         ids, docs, metas = [], [], []
         from uuid import uuid4
         for (s, e, c) in chunks:
             ids.append(str(uuid4()))
             docs.append(c)
-            metas.append({"path": str(file_path), "start": s, "end": e, "sha256": file_hash, "mtime": mtime})
+            
+            # Create metadata for this chunk
+            chunk_metadata = {
+                "path": str(file_path), 
+                "start": s, 
+                "end": e, 
+                "sha256": file_hash, 
+                "mtime": mtime
+            }
+            
+            # Add file-level metadata to each chunk
+            chunk_metadata.update(file_metadata)
+            
+            metas.append(chunk_metadata)
 
         if docs:
             max_batch_size = 5000
@@ -141,7 +166,7 @@ class KnowledgeBase:
                 batch_metas = metas[i:i + max_batch_size]
                 self.collection.upsert(ids=batch_ids, documents=batch_docs, metadatas=batch_metas)
 
-        return {"sha256": file_hash, "mtime": mtime, "count": len(docs)}
+        return {"sha256": file_hash, "mtime": mtime, "count": len(docs), "metadata": file_metadata}
 
     def build(self):
         print("[cyan]Starting fresh build...[/cyan]")

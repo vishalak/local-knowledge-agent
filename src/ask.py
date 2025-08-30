@@ -59,7 +59,22 @@ def main():
     if args.show_sources:
         print(Markdown("--- \n*SOURCES*"))
         for item in items:
-            print(f"[{item['rank']}] {item['path']}:{item['start']}–{item['end']} (distance: {item['distance']:.3f})")
+            # Basic source info
+            source_info = f"[{item['rank']}] {item['path']}:{item['start']}–{item['end']} (distance: {item['distance']:.3f})"
+            
+            # Add metadata info if available
+            if 'filename' in item and item.get('file_size_kb'):
+                source_info += f" | {item['file_size_kb']}KB"
+            if item.get('is_code_file'):
+                source_info += " | CODE"
+            elif item.get('is_documentation'):
+                source_info += " | DOCS"
+            if item.get('modified_date'):
+                # Show just the date part
+                mod_date = item['modified_date'][:10] if len(item['modified_date']) >= 10 else item['modified_date']
+                source_info += f" | Modified: {mod_date}"
+            
+            print(source_info)
         print(Markdown("---"))
 
     context_block = build_context_block(items)
