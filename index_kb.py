@@ -159,9 +159,15 @@ def build(cfg_path: str):
     # Fresh build: wipe old collection by deleting and recreating
     print("[cyan]Starting fresh build...[/cyan]")
     # Dangerous: collection.reset() resets *all* collections for client; avoid.
-    # Instead, delete all docs matching this collection by dropping and recreating.
-    # There is no drop in Chroma client, so we delete by no filter -> deletes entire collection.
-    collection.delete()  # delete everything in this collection
+    # Instead, delete all docs matching this collection by getting all IDs and deleting them.
+    try:
+        # Get all document IDs in the collection
+        result = collection.get()
+        if result['ids']:
+            collection.delete(ids=result['ids'])
+            print(f"[yellow]Deleted {len(result['ids'])} existing documents[/yellow]")
+    except Exception as e:
+        print(f"[yellow]Collection appears to be empty or new: {e}[/yellow]")
 
     state = {"files": {}}
 

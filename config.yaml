@@ -55,6 +55,8 @@ excludes:
   - "tmp"
   - "obj"
   - "bin"
+  - "venv"
+  - "packages"
 
 # Chunking parameters
 chunk:
