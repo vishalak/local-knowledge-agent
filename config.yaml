@@ -69,6 +69,11 @@ metadata:
   extract_advanced: true     # extract detailed file and content metadata
   generate_summaries: false  # generate AI summaries (requires Ollama, slower)
 
+# Retrieval and query enhancement settings
+retrieval:
+  query_transform: "hyde"    # Query transformation method: "none", "hyde", "expand", "enhance", "multi"
+  max_results: 10           # Maximum results to consider before filtering
+
 model:
   embedder: "BAAI/bge-small-en-v1.5"   # local embedding model (downloaded once)
   llm: "llama3:8b"                     # Ollama model name (change as you like)

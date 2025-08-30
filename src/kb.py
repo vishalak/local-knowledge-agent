@@ -16,6 +16,7 @@ from document_processors import extract_text_from_file
 from code_splitters import get_code_aware_chunks
 from semantic_chunker import get_semantic_chunks
 from metadata_extractor import extract_all_metadata
+from query_transformer import transform_query
 
 STATE_DIR = ".kb_state"
 STATE_FILE = "state.json"
@@ -39,6 +40,7 @@ class KnowledgeBase:
         cfg.setdefault("excludes", [".git", "node_modules", ".venv", "__pycache__", "build", "dist"])
         cfg.setdefault("chunk", {"size": 1200, "overlap": 200, "semantic": True})
         cfg.setdefault("metadata", {"generate_summaries": False, "extract_advanced": True})
+        cfg.setdefault("retrieval", {"query_transform": "hyde", "max_results": 10})
         cfg.setdefault("model", {"embedder": "BAAI/bge-small-en-v1.5", "llm": "llama3:8b"})
         return cfg
 
@@ -232,21 +234,92 @@ class KnowledgeBase:
         print(f"[green]Update complete.[/green] Files - added: {added}, changed: {changed}, removed: {len(removed_files)}, unchanged: {unchanged}.")
 
     def retrieve_context(self, query: str, k: int = 6):
-        res = self.collection.query(query_texts=[query], n_results=k, include=["documents", "metadatas", "distances"])
-        docs = res.get("documents", [[]])[0]
-        metas = res.get("metadatas", [[]])[0]
-        distances = res.get("distances", [[]])[0]
-        items = []
-        for i, (d, m) in enumerate(zip(docs, metas)):
-            items.append({
-                "rank": i + 1,
-                "text": d,
-                "path": m.get("path"),
-                "start": m.get("start"),
-                "end": m.get("end"),
-                "distance": distances[i] if i < len(distances) else None,
-            })
-        return items
+        """
+        Retrieve context using enhanced query transformation techniques.
+        
+        Args:
+            query: The user's query
+            k: Number of results to return
+            
+        Returns:
+            List of relevant document chunks with metadata
+        """
+        # Apply query transformation if configured
+        transform_method = self.cfg["retrieval"].get("query_transform", "none")
+        
+        if transform_method != "none":
+            print(f"[cyan]Applying {transform_method} query transformation...[/cyan]")
+            transformation = transform_query(
+                query, 
+                method=transform_method,
+                llm_model=self.cfg["model"]["llm"]
+            )
+            
+            # Use transformed queries for search
+            search_queries = transformation["transformed_queries"]
+            
+            if transform_method == "hyde" and "hyde_document" in transformation:
+                print(f"[dim]HyDE document: {transformation['hyde_document'][:100]}...[/dim]")
+        else:
+            search_queries = [query]
+        
+        # Collect results from all transformed queries
+        all_results = []
+        max_results = self.cfg["retrieval"].get("max_results", 10)
+        
+        for i, search_query in enumerate(search_queries):
+            try:
+                # Adjust k based on number of queries to ensure we get enough total results
+                query_k = min(k if i == 0 else k//2, max_results)
+                
+                res = self.collection.query(
+                    query_texts=[search_query], 
+                    n_results=query_k, 
+                    include=["documents", "metadatas", "distances"]
+                )
+                
+                docs = res.get("documents", [[]])[0]
+                metas = res.get("metadatas", [[]])[0]
+                distances = res.get("distances", [[]])[0]
+                
+                for j, (d, m) in enumerate(zip(docs, metas)):
+                    result_item = {
+                        "rank": len(all_results) + 1,
+                        "text": d,
+                        "path": m.get("path"),
+                        "start": m.get("start"),
+                        "end": m.get("end"),
+                        "distance": distances[j] if j < len(distances) else None,
+                        "query_used": search_query,
+                        "query_index": i
+                    }
+                    
+                    # Add all metadata from the document
+                    result_item.update(m)
+                    all_results.append(result_item)
+                    
+            except Exception as e:
+                print(f"[yellow]Warning: Query '{search_query}' failed: {e}[/yellow]")
+                continue
+        
+        # Remove duplicates based on document path and chunk position
+        seen = set()
+        unique_results = []
+        for item in all_results:
+            key = (item.get("path"), item.get("start"), item.get("end"))
+            if key not in seen:
+                seen.add(key)
+                unique_results.append(item)
+        
+        # Sort by distance (best matches first) and limit results
+        unique_results.sort(key=lambda x: x.get("distance", float('inf')))
+        final_results = unique_results[:k]
+        
+        # Re-rank the results
+        for i, item in enumerate(final_results):
+            item["rank"] = i + 1
+            
+        return final_results
 
     def _reset_client(self):
         """Resets the ChromaDB client. Used for testing to release file locks."""
