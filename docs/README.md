@@ -162,9 +162,22 @@ python src/ask.py --interactive --stream
 **Web Interface:**
 
 ```bash
+# Activate virtual environment first (if not already active)
+# Windows PowerShell:
+.\.venv\Scripts\Activate.ps1
+# Windows Command Prompt:
+.venv\Scripts\activate
+# macOS/Linux:
+source .venv/bin/activate
+
 # Launch the web UI
 streamlit run streamlit_app.py
-# Opens at http://localhost:8501
+
+# The interface will open automatically in your browser at:
+# http://localhost:8501
+# 
+# Or run in headless mode (no auto-open):
+streamlit run streamlit_app.py --server.headless true
 ```
 
 ---
