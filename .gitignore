@@ -161,6 +161,7 @@ cython_debug/
 # Knowledge Base specific files
 chroma_db/
 .kb_state/
+.chat_history/
 *.db
 *.sqlite
 
