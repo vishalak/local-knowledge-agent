@@ -48,6 +48,7 @@ def main():
     parser.add_argument("--interactive", "-i", action="store_true", help="Start interactive conversation mode")
     parser.add_argument("--clear-history", action="store_true", help="Clear conversation history")
     parser.add_argument("--show-history", action="store_true", help="Show conversation summary")
+    parser.add_argument("--stream", action="store_true", help="Enable streaming responses")
     args = parser.parse_args()
 
     # Handle query input
@@ -93,9 +94,11 @@ def main():
         print("Type '/clear' to clear conversation history")
         print("Type '/history' to show conversation summary")
         print("Type '/sources' to toggle source display")
+        print("Type '/stream' to toggle streaming mode")
         print("---")
         
         show_sources_in_interactive = args.show_sources
+        use_streaming = args.stream
         
         try:
             while True:
@@ -127,20 +130,57 @@ def main():
                         print(f"[dim]Source display: {'ON' if show_sources_in_interactive else 'OFF'}[/dim]")
                         continue
                     
+                    if user_input == '/stream':
+                        use_streaming = not use_streaming
+                        print(f"[dim]Streaming mode: {'ON' if use_streaming else 'OFF'}[/dim]")
+                        continue
+                    
                     # Process the query
-                    result = kb.ask_with_context(user_input, k=args.k)
-                    
-                    # Show sources if requested
-                    if show_sources_in_interactive and result['context_docs']:
-                        print("\n[dim]Sources:[/dim]")
-                        for item in result['context_docs'][:3]:  # Show top 3 sources
-                            source_info = f"  [{item['rank']}] {item['path']}:{item['start']}–{item['end']}"
-                            if item.get('distance'):
-                                source_info += f" (dist: {item['distance']:.3f})"
-                            print(f"[dim]{source_info}[/dim]")
-                    
-                    # Show response
-                    print(f"\n{result['response']}")
+                    if use_streaming:
+                        result = kb.ask_with_context(user_input, k=args.k, stream=True)
+                        
+                        # Show sources if requested
+                        if show_sources_in_interactive and result['context_docs']:
+                            print("\n[dim]Sources:[/dim]")
+                            for item in result['context_docs'][:3]:  # Show top 3 sources
+                                source_info = f"  [{item['rank']}] {item['path']}:{item['start']}–{item['end']}"
+                                if item.get('distance'):
+                                    source_info += f" (dist: {item['distance']:.3f})"
+                                print(f"[dim]{source_info}[/dim]")
+                        
+                        # Stream the response
+                        print("\n", end="", flush=True)
+                        full_response = ""
+                        try:
+                            for chunk in result['response_stream']:
+                                print(chunk, end="", flush=True)
+                                full_response += chunk
+                            print()  # New line after streaming
+                            
+                            # Finalize the streaming response in chat history
+                            kb.finalize_streaming_response(
+                                user_input, 
+                                full_response, 
+                                result['context_docs'],
+                                result['enhanced_query'],
+                                result['start_time']
+                            )
+                        except Exception as e:
+                            print(f"\n[red]Streaming error: {e}[/red]")
+                    else:
+                        result = kb.ask_with_context(user_input, k=args.k, stream=False)
+                        
+                        # Show sources if requested
+                        if show_sources_in_interactive and result['context_docs']:
+                            print("\n[dim]Sources:[/dim]")
+                            for item in result['context_docs'][:3]:  # Show top 3 sources
+                                source_info = f"  [{item['rank']}] {item['path']}:{item['start']}–{item['end']}"
+                                if item.get('distance'):
+                                    source_info += f" (dist: {item['distance']:.3f})"
+                                print(f"[dim]{source_info}[/dim]")
+                        
+                        # Show response
+                        print(f"\n{result['response']}")
                     
                 except KeyboardInterrupt:
                     print("\n[yellow]Interrupted[/yellow]")
@@ -159,43 +199,98 @@ def main():
         return
     
     # Use conversational interface for single questions too
-    result = kb.ask_with_context(query, k=args.k)
-    
-    if not result['context_docs']:
-        print("[red]No results in local knowledge base.[/red] Try re-indexing or adjusting your query.")
-        return
+    if args.stream:
+        result = kb.ask_with_context(query, k=args.k, stream=True)
+        
+        if not result['context_docs']:
+            print("[red]No results in local knowledge base.[/red] Try re-indexing or adjusting your query.")
+            return
 
-    if args.show_sources:
-        print(Markdown("--- \n*SOURCES*"))
-        for item in result['context_docs']:
-            # Basic source info
-            source_info = f"[{item['rank']}] {item['path']}:{item['start']}–{item['end']}"
-            if item.get('distance'):
-                source_info += f" (distance: {item['distance']:.3f})"
-            
-            # Add reranking scores if available
-            if item.get('bm25_score'):
-                source_info += f" (BM25: {item['bm25_score']:.3f})"
-            if item.get('hybrid_score'):
-                source_info += f" (hybrid: {item['hybrid_score']:.3f})"
-            
-            # Add metadata info if available
-            if 'filename' in item and item.get('file_size_kb'):
-                source_info += f" | {item['file_size_kb']}KB"
-            if item.get('is_code_file'):
-                source_info += " | CODE"
-            elif item.get('is_documentation'):
-                source_info += " | DOCS"
-            if item.get('modified_date'):
-                # Show just the date part
-                mod_date = item['modified_date'][:10] if len(item['modified_date']) >= 10 else item['modified_date']
-                source_info += f" | Modified: {mod_date}"
-            
-            print(source_info)
-        print(Markdown("---"))
+        if args.show_sources:
+            print(Markdown("--- \n*SOURCES*"))
+            for item in result['context_docs']:
+                # Basic source info
+                source_info = f"[{item['rank']}] {item['path']}:{item['start']}–{item['end']}"
+                if item.get('distance'):
+                    source_info += f" (distance: {item['distance']:.3f})"
+                
+                # Add reranking scores if available
+                if item.get('bm25_score'):
+                    source_info += f" (BM25: {item['bm25_score']:.3f})"
+                if item.get('hybrid_score'):
+                    source_info += f" (hybrid: {item['hybrid_score']:.3f})"
+                
+                # Add metadata info if available
+                if 'filename' in item and item.get('file_size_kb'):
+                    source_info += f" | {item['file_size_kb']}KB"
+                if item.get('is_code_file'):
+                    source_info += " | CODE"
+                elif item.get('is_documentation'):
+                    source_info += " | DOCS"
+                if item.get('modified_date'):
+                    # Show just the date part
+                    mod_date = item['modified_date'][:10] if len(item['modified_date']) >= 10 else item['modified_date']
+                    source_info += f" | Modified: {mod_date}"
+                
+                print(source_info)
+            print(Markdown("---"))
 
-    # Show the response
-    print(Markdown(result['response']))
+        # Stream the response
+        full_response = ""
+        try:
+            for chunk in result['response_stream']:
+                print(chunk, end="", flush=True)
+                full_response += chunk
+            print()  # New line after streaming
+            
+            # Finalize the streaming response in chat history
+            kb.finalize_streaming_response(
+                query, 
+                full_response, 
+                result['context_docs'],
+                result['enhanced_query'],
+                result['start_time']
+            )
+        except Exception as e:
+            print(f"[red]Streaming error: {e}[/red]")
+    else:
+        result = kb.ask_with_context(query, k=args.k, stream=False)
+        
+        if not result['context_docs']:
+            print("[red]No results in local knowledge base.[/red] Try re-indexing or adjusting your query.")
+            return
+
+        if args.show_sources:
+            print(Markdown("--- \n*SOURCES*"))
+            for item in result['context_docs']:
+                # Basic source info
+                source_info = f"[{item['rank']}] {item['path']}:{item['start']}–{item['end']}"
+                if item.get('distance'):
+                    source_info += f" (distance: {item['distance']:.3f})"
+                
+                # Add reranking scores if available
+                if item.get('bm25_score'):
+                    source_info += f" (BM25: {item['bm25_score']:.3f})"
+                if item.get('hybrid_score'):
+                    source_info += f" (hybrid: {item['hybrid_score']:.3f})"
+                
+                # Add metadata info if available
+                if 'filename' in item and item.get('file_size_kb'):
+                    source_info += f" | {item['file_size_kb']}KB"
+                if item.get('is_code_file'):
+                    source_info += " | CODE"
+                elif item.get('is_documentation'):
+                    source_info += " | DOCS"
+                if item.get('modified_date'):
+                    # Show just the date part
+                    mod_date = item['modified_date'][:10] if len(item['modified_date']) >= 10 else item['modified_date']
+                    source_info += f" | Modified: {mod_date}"
+                
+                print(source_info)
+            print(Markdown("---"))
+
+        # Show the response
+        print(Markdown(result['response']))
 
 if __name__ == "__main__":
     main()

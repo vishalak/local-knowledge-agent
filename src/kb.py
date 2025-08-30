@@ -20,6 +20,7 @@ from metadata_extractor import extract_all_metadata
 from query_transformer import transform_query
 from reranker import create_reranker
 from chat_history import create_chat_history
+from chat_history import create_chat_history
 
 STATE_DIR = ".kb_state"
 STATE_FILE = "state.json"
@@ -395,16 +396,17 @@ class KnowledgeBase:
         
         return final_results
 
-    def ask_with_context(self, query: str, k: int = 6) -> Dict[str, Any]:
+    def ask_with_context(self, query: str, k: int = 6, stream: bool = False):
         """
         Ask a question with conversation context support.
         
         Args:
             query: The user's question
             k: Number of context documents to retrieve
+            stream: Whether to return streaming response or complete response
             
         Returns:
-            Dictionary with response, context documents, and metadata
+            Dictionary with response/response_stream, context documents, and metadata
         """
         start_time = time.time()
         
@@ -424,32 +426,68 @@ class KnowledgeBase:
         # Retrieve relevant context using the enhanced query
         context_docs = self.retrieve_context(enhanced_query, k=k)
         
-        # Generate response using LLM
-        response = self._generate_response(query, context_docs, enhanced_query)
+        # Generate response using LLM (streaming or non-streaming)
+        if stream:
+            response_stream = self._generate_response(query, context_docs, enhanced_query, stream=True)
+            
+            return {
+                "response_stream": response_stream,
+                "context_docs": context_docs,
+                "enhanced_query": enhanced_query,
+                "conversation_id": self.chat_history.session_id if self.chat_history else None,
+                "start_time": start_time
+            }
+        else:
+            response = self._generate_response(query, context_docs, enhanced_query, stream=False)
+            
+            # Add to chat history if enabled
+            if self.chat_enabled and self.chat_history:
+                self.chat_history.add_exchange(
+                    user_query=query,
+                    assistant_response=response,
+                    context_docs=context_docs,
+                    metadata={
+                        "enhanced_query": enhanced_query,
+                        "num_context_docs": len(context_docs),
+                        "response_time": time.time() - start_time
+                    }
+                )
+            
+            return {
+                "response": response,
+                "context_docs": context_docs,
+                "enhanced_query": enhanced_query,
+                "conversation_id": self.chat_history.session_id if self.chat_history else None,
+                "response_time": time.time() - start_time
+            }
+    
+    def finalize_streaming_response(self, query: str, full_response: str, context_docs: List[Dict], 
+                                  enhanced_query: str, start_time: float):
+        """
+        Finalize a streaming response by adding it to chat history.
         
-        # Add to chat history if enabled
+        Args:
+            query: Original user query
+            full_response: Complete response text
+            context_docs: Context documents used
+            enhanced_query: Enhanced query used
+            start_time: Start time of the request
+        """
         if self.chat_enabled and self.chat_history:
             self.chat_history.add_exchange(
                 user_query=query,
-                assistant_response=response,
+                assistant_response=full_response,
                 context_docs=context_docs,
                 metadata={
                     "enhanced_query": enhanced_query,
                     "num_context_docs": len(context_docs),
-                    "response_time": time.time() - start_time
+                    "response_time": time.time() - start_time,
+                    "streamed": True
                 }
             )
-        
-        return {
-            "response": response,
-            "context_docs": context_docs,
-            "enhanced_query": enhanced_query,
-            "conversation_id": self.chat_history.session_id if self.chat_history else None,
-            "response_time": time.time() - start_time
-        }
     
     def _generate_response(self, original_query: str, context_docs: List[Dict], 
-                          enhanced_query: str) -> str:
+                          enhanced_query: str, stream: bool = False):
         """
         Generate response using LLM based on context documents.
         
@@ -457,13 +495,17 @@ class KnowledgeBase:
             original_query: The user's original question
             context_docs: Retrieved context documents
             enhanced_query: Query enhanced with conversation context
+            stream: Whether to return a streaming generator or complete response
             
         Returns:
-            Generated response
+            Generated response (string) or streaming generator
         """
         # If no context found, return a helpful message
         if not context_docs:
-            return "I don't have enough information in the local knowledge base to answer that question."
+            no_context_msg = "I don't have enough information in the local knowledge base to answer that question."
+            if stream:
+                return self._stream_text(no_context_msg)
+            return no_context_msg
         
         # Build context string from retrieved documents
         context_parts = []
@@ -490,28 +532,30 @@ Question: {original_query}
 
 Please provide a helpful and accurate answer based on the context provided. If the context doesn't contain enough information to fully answer the question, please say so."""
         
-        # For now, return a simple response (in a real implementation, this would call an LLM)
-        # This is a placeholder since we don't want to require Ollama for basic functionality
+        # Try to use LLM if available
         try:
-            # Attempt to use LLM if available
             import requests
             
             llm_model = self.cfg["model"]["llm"]
-            response = requests.post(
-                "http://localhost:11434/api/generate",
-                json={
-                    "model": llm_model,
-                    "prompt": prompt,
-                    "stream": False
-                },
-                timeout=30
-            )
             
-            if response.status_code == 200:
-                return response.json().get("response", "No response generated.")
+            if stream:
+                return self._stream_llm_response(llm_model, prompt)
             else:
-                raise Exception(f"LLM request failed with status {response.status_code}")
+                response = requests.post(
+                    "http://localhost:11434/api/generate",
+                    json={
+                        "model": llm_model,
+                        "prompt": prompt,
+                        "stream": False
+                    },
+                    timeout=30
+                )
                 
+                if response.status_code == 200:
+                    return response.json().get("response", "No response generated.")
+                else:
+                    raise Exception(f"LLM request failed with status {response.status_code}")
+                    
         except Exception as e:
             # Fallback to context-based response
             print(f"[yellow]LLM not available ({e}), using context summary[/yellow]")
@@ -522,7 +566,82 @@ Please provide a helpful and accurate answer based on the context provided. If t
             else:
                 context_summary = context_text
             
-            return f"Based on the available information: {context_summary}"
+            fallback_response = f"Based on the available information: {context_summary}"
+            if stream:
+                return self._stream_text(fallback_response)
+            return fallback_response
+    
+    def _stream_llm_response(self, model: str, prompt: str):
+        """
+        Stream response from LLM.
+        
+        Args:
+            model: LLM model name
+            prompt: The prompt to send
+            
+        Yields:
+            Response chunks as they arrive
+        """
+        import requests
+        
+        try:
+            response = requests.post(
+                "http://localhost:11434/api/generate",
+                json={
+                    "model": model,
+                    "prompt": prompt,
+                    "stream": True
+                },
+                stream=True,
+                timeout=60
+            )
+            
+            if response.status_code == 200:
+                import json
+                for line in response.iter_lines():
+                    if line:
+                        try:
+                            data = json.loads(line.decode('utf-8'))
+                            if 'response' in data:
+                                yield data['response']
+                            if data.get('done', False):
+                                break
+                        except json.JSONDecodeError:
+                            continue
+            else:
+                # Fall back to non-streaming if streaming fails
+                yield f"[Streaming failed, status {response.status_code}]"
+                
+        except Exception as e:
+            yield f"[Streaming error: {e}]"
+    
+    def _stream_text(self, text: str, chunk_size: int = 20):
+        """
+        Simulate streaming for non-LLM text by yielding chunks.
+        
+        Args:
+            text: Text to stream
+            chunk_size: Number of characters per chunk
+            
+        Yields:
+            Text chunks
+        """
+        import time
+        
+        words = text.split()
+        current_chunk = ""
+        
+        for word in words:
+            if len(current_chunk) + len(word) + 1 <= chunk_size:
+                current_chunk += word + " "
+            else:
+                if current_chunk:
+                    yield current_chunk
+                    time.sleep(0.05)  # Small delay to simulate streaming
+                current_chunk = word + " "
+        
+        if current_chunk:
+            yield current_chunk
     
     def get_conversation_summary(self) -> Optional[Dict[str, Any]]:
         """Get summary of current conversation."""
