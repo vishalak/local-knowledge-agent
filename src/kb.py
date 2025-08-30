@@ -4,6 +4,7 @@ import json
 import os
 from pathlib import Path
 from typing import Dict, List, Tuple
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import yaml
 from tqdm import tqdm
@@ -12,6 +13,7 @@ from rich import print
 import chromadb
 from chromadb.utils import embedding_functions
 from document_processors import extract_text_from_file
+from code_splitters import get_code_aware_chunks
 
 STATE_DIR = ".kb_state"
 STATE_FILE = "state.json"
@@ -78,7 +80,15 @@ class KnowledgeBase:
                 if self._file_should_include(p):
                     yield p
 
-    def _chunk_text(self, text: str) -> List[Tuple[int, int, str]]:
+    def _chunk_text(self, text: str, file_path: Path = None) -> List[Tuple[int, int, str]]:
+        """Chunk text, using code-aware splitting for code files when possible."""
+        if file_path:
+            # Try code-aware chunking first
+            code_chunks = get_code_aware_chunks(file_path, text, self.cfg["chunk"]["size"])
+            if code_chunks is not None:
+                return code_chunks
+        
+        # Fall back to regular chunking
         size = self.cfg["chunk"]["size"]
         overlap = self.cfg["chunk"]["overlap"]
         if size <= 0:
@@ -105,7 +115,7 @@ class KnowledgeBase:
             return None
 
         b = file_path.read_bytes()
-        chunks = self._chunk_text(text)
+        chunks = self._chunk_text(text, file_path)
         file_hash = self._sha256_bytes(b)
         mtime = int(file_path.stat().st_mtime)
 
@@ -138,10 +148,22 @@ class KnowledgeBase:
 
         self.state = {"files": {}}
         files = list(self._iter_files())
-        for p in tqdm(files, desc="Indexing", unit="file"):
-            info = self._upsert_file(p)
-            if info:
-                self.state["files"][str(p)] = info
+        
+        # Process files in parallel
+        max_workers = min(4, len(files))  # Limit workers to avoid overwhelming the system
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            # Submit all file processing tasks
+            future_to_file = {executor.submit(self._upsert_file, p): p for p in files}
+            
+            # Process results as they complete
+            for future in tqdm(as_completed(future_to_file), total=len(files), desc="Indexing", unit="file"):
+                file_path = future_to_file[future]
+                try:
+                    info = future.result()
+                    if info:
+                        self.state["files"][str(file_path)] = info
+                except Exception as e:
+                    print(f"[red]Error processing {file_path}: {e}[/red]")
 
         self._save_state()
         print(f"[green]Build complete.[/green] Indexed {len(self.state['files'])} files.")

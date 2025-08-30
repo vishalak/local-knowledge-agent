@@ -65,7 +65,9 @@ class TestKnowledgeBase(unittest.TestCase):
         """Test the text chunking logic."""
         kb = KnowledgeBase(config_path=str(self.config_path))
         text = "a" * 250
-        chunks = kb._chunk_text(text)
+        # Use a dummy path that won't trigger code-aware chunking
+        dummy_path = Path("test.txt")
+        chunks = kb._chunk_text(text, dummy_path)
         
         self.assertEqual(len(chunks), 3)
         self.assertEqual(chunks[0][2], "a" * 100) # First chunk: 0-100
