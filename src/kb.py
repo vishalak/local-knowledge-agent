@@ -14,6 +14,7 @@ import chromadb
 from chromadb.utils import embedding_functions
 from document_processors import extract_text_from_file
 from code_splitters import get_code_aware_chunks
+from semantic_chunker import get_semantic_chunks
 
 STATE_DIR = ".kb_state"
 STATE_FILE = "state.json"
@@ -35,7 +36,7 @@ class KnowledgeBase:
         cfg.setdefault("collection", "local_kb")
         cfg.setdefault("include_extensions", [".md", ".txt", ".py", ".pdf", ".docx", ".doc"])
         cfg.setdefault("excludes", [".git", "node_modules", ".venv", "__pycache__", "build", "dist"])
-        cfg.setdefault("chunk", {"size": 1200, "overlap": 200})
+        cfg.setdefault("chunk", {"size": 1200, "overlap": 200, "semantic": True})
         cfg.setdefault("model", {"embedder": "BAAI/bge-small-en-v1.5", "llm": "llama3:8b"})
         return cfg
 
@@ -81,12 +82,18 @@ class KnowledgeBase:
                     yield p
 
     def _chunk_text(self, text: str, file_path: Path = None) -> List[Tuple[int, int, str]]:
-        """Chunk text, using code-aware splitting for code files when possible."""
+        """Chunk text, using code-aware or semantic splitting when possible."""
         if file_path:
-            # Try code-aware chunking first
+            # Try code-aware chunking first for code files
             code_chunks = get_code_aware_chunks(file_path, text, self.cfg["chunk"]["size"])
             if code_chunks is not None:
                 return code_chunks
+        
+        # Try semantic chunking if enabled and not a code file
+        if self.cfg["chunk"].get("semantic", False):
+            semantic_chunks = get_semantic_chunks(text, self.cfg["chunk"]["size"])
+            if semantic_chunks is not None:
+                return semantic_chunks
         
         # Fall back to regular chunking
         size = self.cfg["chunk"]["size"]

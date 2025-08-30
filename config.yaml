@@ -62,6 +62,7 @@ excludes:
 chunk:
   size: 1200        # characters per chunk
   overlap: 200      # overlap between chunks
+  semantic: true    # use semantic chunking for better content grouping
 
 model:
   embedder: "BAAI/bge-small-en-v1.5"   # local embedding model (downloaded once)
